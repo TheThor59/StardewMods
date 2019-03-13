@@ -1,5 +1,6 @@
 ﻿using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Netcode;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Utilities;
@@ -13,35 +14,61 @@ using System.Threading.Tasks;
 
 namespace Thor.Stardew.Mods.HealthBars
 {
+    /// <summary>
+    /// Main class of the mod
+    /// </summary>
     public class ModEntry : Mod
     {
         private Texture2D _whitePixel;
+        /// <summary>
+        /// Contains the configuration of the mod
+        /// </summary>
+        private ModConfig _config;
+
+        /// <summary>
+        /// Available colour schemes of the life bar
+        /// </summary>
         private static readonly Color[][] ColourSchemes =
         {
             new Color[] { Color.LawnGreen, Color.YellowGreen, Color.Gold, Color.DarkOrange, Color.Crimson },
             new Color[] { Color.Crimson, Color.DarkOrange, Color.Gold, Color.YellowGreen, Color.LawnGreen },
         };
 
+        /// <summary>
+        /// Mod initialization method
+        /// </summary>
+        /// <param name="helper">helper provided by SMAPI</param>
         public override void Entry(IModHelper helper)
         {
-            helper.Events.Display.RenderedWorld += DrawTickEvent;
+            _config = Helper.ReadConfig<ModConfig>();
+            EnsureCorrectConfig();
+            helper.Events.Display.RenderedWorld += RenderLifeBars;
         }
+
         /// <summary>
-        /// Handle button pressed
+        /// Method that ensure the configuration provided by user is correct and will not break the game
         /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void OnButtonPressed(object sender, ButtonPressedEventArgs e)
+        private void EnsureCorrectConfig()
         {
-            // ignore if player hasn't loaded a save yet
-            if (!Context.IsWorldReady)
-                return;
+            bool needUpdateConfig = false;
+            if (_config.ColorScheme >= ColourSchemes.Length || _config.ColorScheme < 0)
+            {
+                _config.ColorScheme = 0;
+                needUpdateConfig = true;
+            }
 
-            // print button presses to the console window
-            Monitor.Log($"{Game1.player.Name} pressed {e.Button}.");
+            if (needUpdateConfig)
+            {
+                Helper.WriteConfig(_config);
+            }
         }
 
-        private void DrawTickEvent(object sender, RenderedWorldEventArgs e)
+        /// <summary>
+        /// Handle the rendering of mobs life bars
+        /// </summary>
+        /// <param name="sender">Event sender</param>
+        /// <param name="e">Event parameters</param>
+        private void RenderLifeBars(object sender, RenderedWorldEventArgs e)
         {
             if (Game1.currentLocation == null || Game1.gameMode == 11 || Game1.currentMinigame != null || Game1.showingEndOfNightStuff || Game1.gameMode == 6 || Game1.gameMode == 0 || Game1.menuUp || Game1.activeClickableMenu != null) return;
 
@@ -51,150 +78,141 @@ namespace Thor.Stardew.Mods.HealthBars
                 _whitePixel.SetData(new Color[] { Color.White });
             }
 
-            //Game1.spriteBatch.Begin(SpriteSortMode.Immediate, BlendState.AlphaBlend);
+            // Iterate through all NPC
             foreach (NPC character in Game1.currentLocation.characters)
             {
-                Monster monster;
+                // We only care about monsters
+                if (!(character is Monster))
+                {
+                    continue;
+                }
+                Monster monster = (Monster)character;
+                // If monster is not visible, next
+                if (monster.isInvisible || !Utility.isOnScreen(monster.position, 3 * Game1.tileSize))
+                {
+                    continue;
+                }
+
+                // Get all infos about the monster
+                int health = monster.Health;
+                int maxHealth = monster.MaxHealth;
+                if (health > maxHealth) maxHealth = health;
+                
+                // If monster has already been killed once by player, we get the number of kills, else it's 0
+                int monsterKilledAmount = Game1.stats.specificMonstersKilled.ContainsKey(monster.name) ? Game1.stats.specificMonstersKilled[monster.name] : 0;
+                String healthText = "???";
+
+                // By default, color bar is grey
+                Color barColor = Color.DarkSlateGray;
+                // By default, color bar full
+                float barLengthPercent = 1f;
+
+                // If level system is deactivated or the basic level is OK, we display the colours
+                if (!_config.EnableXPNeeded || monsterKilledAmount + Game1.player.combatLevel > Globals.EXPERIENCE_BASIC_STATS_LEVEL)
+                {
+                    float monsterHealthPercent = (float)health / (float)maxHealth;
+                    if (monsterHealthPercent > 0.9f) barColor = ColourSchemes[_config.ColorScheme][0];
+                    else if (monsterHealthPercent > 0.65f) barColor = ColourSchemes[_config.ColorScheme][1];
+                    else if (monsterHealthPercent > 0.35f) barColor = ColourSchemes[_config.ColorScheme][2];
+                    else if (monsterHealthPercent > 0.15f) barColor = ColourSchemes[_config.ColorScheme][3];
+                    else barColor = ColourSchemes[_config.ColorScheme][4];
+
+                    // If level system is deactivated or the full level is OK, we display the stats
+                    if (!_config.EnableXPNeeded || monsterKilledAmount + Game1.player.combatLevel * 4 > Globals.EXPERIENCE_FULL_STATS_LEVEL)
+                    {
+                        barLengthPercent = monsterHealthPercent;
+                        // If it's a very strong monster, we hide the life counter
+                        if (_config.EnableXPNeeded && monster.health > 999) healthText = "!!!";
+                        else healthText = String.Format("{0:000}", health);
+                    }
+                }
+
+                // Display the life bar
                 GreenSlime slime;
                 Rectangle monsterBox;
                 Rectangle lifeBox;
                 Vector2 monsterLocalPosition;
-                Color barColor;
-                String healthText;
-                float monsterHealthPercent;
-                float barLengthPercent;
-                int monsterKilledAmount;
-                if (character is Monster)
+                monsterLocalPosition = monster.getLocalPosition(Game1.viewport);
+                monsterBox = new Rectangle((int)monsterLocalPosition.X, (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight / 2 * Game1.pixelZoom, monster.Sprite.spriteWidth * Game1.pixelZoom, 16);
+                if (monster is GreenSlime)
                 {
-                    monster = (Monster)character;
-
-                    if (!monster.isInvisible && Utility.isOnScreen(monster.position, 3 * Game1.tileSize))
+                    slime = (GreenSlime)monster;
+                    if (slime.hasSpecialItem)
                     {
-                        Netcode.NetInt health = monster.health;
-                        Netcode.NetInt maxHealth = monster.maxHealth;
-                        if (health > maxHealth) maxHealth = health;
-
-                        if (Game1.stats.specificMonstersKilled.ContainsKey(monster.name))
-                        {
-                            monsterKilledAmount = Game1.stats.specificMonstersKilled[monster.name];
-                        }
-                        else
-                        {
-                            monsterKilledAmount = 0;
-                        }
-
-                        healthText = "???";
-                        if (monsterKilledAmount + Game1.player.combatLevel > 15)
-                        {
-                            //basic stats
-                            monsterHealthPercent = (float)health / (float)maxHealth;
-                            barLengthPercent = 1f;
-                            if (monsterHealthPercent > 0.9f) barColor = ColourSchemes[0][0];
-                            else if (monsterHealthPercent > 0.65f) barColor = ColourSchemes[0][1];
-                            else if (monsterHealthPercent > 0.35f) barColor = ColourSchemes[0][2];
-                            else if (monsterHealthPercent > 0.15f) barColor = ColourSchemes[0][3];
-                            else barColor = ColourSchemes[0][4];
-
-                            if (monsterKilledAmount + Game1.player.combatLevel * 4 > 45)
-                            {
-                                barLengthPercent = monsterHealthPercent;
-                                if (monster.health > 999) healthText = "!!!";
-                                else healthText = String.Format("{0:000}", monster.health);
-                            }
-                        }
-                        else
-                        {
-                            barLengthPercent = 1f;
-                            barColor = Color.DarkSlateGray;
-                        }
-
-                        monsterLocalPosition = monster.getLocalPosition(Game1.viewport);
-                        monsterBox = new Rectangle((int)monsterLocalPosition.X, (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight / 2 * Game1.pixelZoom, monster.Sprite.spriteWidth * Game1.pixelZoom, 12);
-                        if (monster is GreenSlime)
-                        {
-                            slime = (GreenSlime)monster;
-                            if (slime.hasSpecialItem)
-                            {
-                                monsterBox.X -= 5;
-                                monsterBox.Width += 10;
-                            }
-                            else if (slime.cute)
-                            {
-                                monsterBox.X -= 2;
-                                monsterBox.Width += 4;
-                            }
-                            else
-                            {
-                                monsterBox.Y += 5 * Game1.pixelZoom;
-                            }
-                        }
-                        else if (monster is RockCrab || monster is LavaCrab)
-                        {
-                            if (monster.Sprite.CurrentFrame % 4 == 0) continue;
-                        }
-                        else if (monster is RockGolem)
-                        {
-                            if (monster.health == monster.maxHealth) continue;
-                            monsterBox.Y = (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight * Game1.pixelZoom * 3 / 4;
-                        }
-                        else if (monster is Bug)
-                        {
-                            if (((Bug)monster).isArmoredBug) continue;
-                            monsterBox.Y -= 15 * Game1.pixelZoom;
-                        }
-                        else if (monster is Grub)
-                        {
-                            if (monster.Sprite.CurrentFrame == 19) continue;
-                            monsterBox.Y = (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight * Game1.pixelZoom * 4 / 7;
-                        }
-                        else if (monster is Fly)
-                        {
-                            monsterBox.Y = (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight * Game1.pixelZoom * 5 / 7;
-                        }
-                        else if (monster is DustSpirit)
-                        {
-                            monsterBox.X += 3;
-                            monsterBox.Width -= 6;
-                            monsterBox.Y += 5 * Game1.pixelZoom;
-                        }
-                        else if (monster is Bat)
-                        {
-                            if (monster.Sprite.CurrentFrame == 4) continue;
-                            monsterBox.X -= 1;
-                            monsterBox.Width -= 2;
-                            monsterBox.Y += 1 * Game1.pixelZoom;
-                        }
-                        else if (monster is MetalHead || monster is Mummy)
-                        {
-                            monsterBox.Y -= 2 * Game1.pixelZoom;
-                        }
-                        else if (monster is Skeleton || monster is ShadowBrute || monster is ShadowShaman || monster is SquidKid)
-                        {
-                            if (monster.health == monster.maxHealth) continue;
-                            monsterBox.Y -= 7 * Game1.pixelZoom;
-                        }
-                        monsterBox.X = (int)((float)monsterBox.X * Game1.options.zoomLevel);
-                        monsterBox.Y = (int)((float)monsterBox.Y * Game1.options.zoomLevel);
-                        monsterBox.Width = (int)((float)monsterBox.Width * Game1.options.zoomLevel);
-                        monsterBox.Height = (int)((float)monsterBox.Height * Game1.options.zoomLevel);
-                        lifeBox = monsterBox;
-                        ++lifeBox.X;
-                        ++lifeBox.Y;
-                        lifeBox.Height = monsterBox.Height - 2;
-                        lifeBox.Width = monsterBox.Width - 2;
-                        Game1.spriteBatch.Draw(_whitePixel, monsterBox, Color.BurlyWood);
-                        Game1.spriteBatch.Draw(_whitePixel, lifeBox, Color.SaddleBrown);
-                        lifeBox.Width = (int)((float)lifeBox.Width * barLengthPercent);
-                        Game1.spriteBatch.Draw(_whitePixel, lifeBox, barColor);
-                        if (barColor == Color.DarkSlateGray || barLengthPercent < 0.35f)
-                            Utility.drawTextWithShadow(Game1.spriteBatch, healthText, Game1.smallFont, new Vector2(monsterBox.X + (float)monsterBox.Width / 2 - 9 * Game1.options.zoomLevel, monsterBox.Y + 2), Color.AntiqueWhite, Game1.options.zoomLevel * 0.4f, -1, 0, 0, 0, 0);
-                        else
-                            Utility.drawTextWithShadow(Game1.spriteBatch, healthText, Game1.smallFont, new Vector2(monsterBox.X + (float)monsterBox.Width / 2 - 9 * Game1.options.zoomLevel, monsterBox.Y + 2), Color.DarkSlateGray, Game1.options.zoomLevel * 0.4f, -1, 0, 0, 0, 0);
+                        monsterBox.X -= 5;
+                        monsterBox.Width += 10;
+                    }
+                    else if (slime.cute)
+                    {
+                        monsterBox.X -= 2;
+                        monsterBox.Width += 4;
+                    }
+                    else
+                    {
+                        monsterBox.Y += 5 * Game1.pixelZoom;
                     }
                 }
-            }
+                else if (monster is RockCrab || monster is LavaCrab)
+                {
+                    if (monster.Sprite.CurrentFrame % 4 == 0) continue;
+                }
+                else if (monster is RockGolem)
+                {
+                    if (monster.health == monster.maxHealth) continue;
+                    monsterBox.Y = (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight * Game1.pixelZoom * 3 / 4;
+                }
+                else if (monster is Bug)
+                {
+                    if (((Bug)monster).isArmoredBug) continue;
+                    monsterBox.Y -= 15 * Game1.pixelZoom;
+                }
+                else if (monster is Grub)
+                {
+                    if (monster.Sprite.CurrentFrame == 19) continue;
+                    monsterBox.Y = (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight * Game1.pixelZoom * 4 / 7;
+                }
+                else if (monster is Fly)
+                {
+                    monsterBox.Y = (int)monsterLocalPosition.Y - monster.Sprite.spriteHeight * Game1.pixelZoom * 5 / 7;
+                }
+                else if (monster is DustSpirit)
+                {
+                    monsterBox.X += 3;
+                    monsterBox.Width -= 6;
+                    monsterBox.Y += 5 * Game1.pixelZoom;
+                }
+                else if (monster is Bat)
+                {
+                    if (monster.Sprite.CurrentFrame == 4) continue;
+                    monsterBox.X -= 1;
+                    monsterBox.Width -= 2;
+                    monsterBox.Y += 1 * Game1.pixelZoom;
+                }
+                else if (monster is MetalHead || monster is Mummy)
+                {
+                    monsterBox.Y -= 2 * Game1.pixelZoom;
+                }
+                else if (monster is Skeleton || monster is ShadowBrute || monster is ShadowShaman || monster is SquidKid)
+                {
+                    if (monster.health == monster.maxHealth) continue;
+                    monsterBox.Y -= 7 * Game1.pixelZoom;
+                }
+                monsterBox.X = (int)((float)monsterBox.X);
+                monsterBox.Y = (int)((float)monsterBox.Y);
+                monsterBox.Width = (int)((float)monsterBox.Width);
+                monsterBox.Height = (int)((float)monsterBox.Height);
+                lifeBox = new Rectangle(monsterBox.X+1, monsterBox.Y+1, monsterBox.Width - 2, monsterBox.Height - 2);
+                // Draw life bar border
+                Game1.spriteBatch.Draw(_whitePixel, monsterBox, Color.BurlyWood);
+                Game1.spriteBatch.Draw(_whitePixel, lifeBox, Color.SaddleBrown);
+                lifeBox.Width = (int)((float)lifeBox.Width * barLengthPercent);
+                // Draw life bar
+                Game1.spriteBatch.Draw(_whitePixel, lifeBox, barColor);
+                Color textColor = (barColor == Color.DarkSlateGray || barLengthPercent < 0.35f) ? Color.AntiqueWhite : Color.DarkSlateGray;
+                // Draw text
+                Utility.drawTextWithShadow(Game1.spriteBatch, healthText, Game1.tinyFont, new Vector2(monsterBox.X + (float)monsterBox.Width / 2 - Game1.tinyFont.MeasureString(healthText).X * Globals.TEXT_SCALE_LEVEL / 2, monsterBox.Y + (float)monsterBox.Height / 2 - Game1.tinyFont.MeasureString(healthText).Y * Globals.TEXT_SCALE_LEVEL / 2), textColor, Globals.TEXT_SCALE_LEVEL, -1, 1, -1, 0.4f, 0);
 
-            //Game1.spriteBatch.End();
+            }
         }
     }
 }

@@ -12,6 +12,15 @@ The indicator will only display the health of enemies depending on the number of
 Please ensure first that you have installed [SMAPI](https://www.smapi.io/).
 To install this mod, please download the zip file and uncompress it in the mods folder of you Stardew Valley installation.
 
+## Configuration
+This mod has 2 configuration possibilities
+- Invert coloring of the enemies life
+- Deactivate experience requirements on life display
+
+To edit the configuration, open the mods folder of your Stardew Valley installation and go inside EnemyHealthBars folder. Edit file config.json and :
+- Set variable ColorScheme to 1 if you want to use alternative color scheme
+- Set variable EnableXPNeeded to false if you want to deactivate experience requirements.
+
 ## Uninstalling
 To uninstall this mod, just remove the folder EnemyHealthBars from you Stardew Valley mods folder.
 
