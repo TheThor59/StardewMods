@@ -1,7 +1,7 @@
 ﻿{
   "Name": "EnemyHealthBars",
   "Author": "TheThor59",
-  "Version": "0.1.0",
+  "Version": "0.2.0",
   "Description": "Mods that display health bars above enemies. Work is based on outdated mod : https://gitlab.com/speeder1/SMAPIHealthbarMod/tree/master/SMAPIHealthBarMod",
   "UniqueID": "Thor.EnemyHealthBars",
   "EntryDll": "Thor.Stardew.Mods.HealthBars.dll",
